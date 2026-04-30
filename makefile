@@ -65,10 +65,15 @@ CFLAGS += \
 	-T $(LINK_SCRIPT) \
 
 SRCS += \
+	early_debug.c \
 	system_ch32v30x.c \
 	ch32v30x_it.c \
+	kermit.c \
 	usb_desc.c \
 	ch32v30x_usbfs_device.c  \
+	fifo.c \
+	uart.c \
+	kr.c \
 	main.c \
 
 INCS += \
