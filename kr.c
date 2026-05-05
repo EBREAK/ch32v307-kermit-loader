@@ -9,6 +9,7 @@ uint32_t flash_paddr = 0xFFFFFFFF;
 void kr_link_send(uint8_t *buf, uint8_t len)
 {
 	uart1_type(buf, len);
+	usb_hid_send(buf, len);
 }
 
 static void kermit_fhdr_cb(struct kermit_context *kctx)

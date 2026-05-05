@@ -11,10 +11,31 @@
 *******************************************************************************/
 
 #include "ch32v30x_usbfs_device.h"
+#include "fifo.h"
+#include "kr.h"
 
 /*******************************************************************************/
 /* Variable Definition */
 /* Global */
+
+#define USB_HID_RXFIFO_SIZE (0x1F + 1)
+uint8_t usb_hid_rxfifo_buf[USB_HID_RXFIFO_SIZE];
+struct fifo8 usb_hid_rxfifo = {
+	.buf = &usb_hid_rxfifo_buf[0],
+	.mask = USB_HID_RXFIFO_SIZE - 1,
+	.head = 0,
+	.tail = 0,
+};
+
+#define USB_HID_TXFIFO_SIZE (0x1F + 1)
+uint8_t usb_hid_txfifo_buf[USB_HID_TXFIFO_SIZE];
+struct fifo8 usb_hid_txfifo = {
+	.buf = &usb_hid_txfifo_buf[0],
+	.mask = USB_HID_TXFIFO_SIZE - 1,
+	.head = 0,
+	.tail = 0,
+};
+
 const uint8_t *pUSBFS_Descr;
 
 /* Setup Request */
@@ -126,6 +147,28 @@ void USBFS_Device_Init(FunctionalState sta)
 		Delay_Us(10);
 		USBFSH->BASE_CTRL = 0x00;
 		NVIC_DisableIRQ(USBFS_IRQn);
+	}
+}
+
+void ep1_out_handle(int len) {
+	if (len == 0) { return; }
+	len = USBFS_EP1_Buf[0];
+	if (len > 7) {
+		len = 7;
+	}
+	//debug_puts("EP1 OUT LEN ");
+	//debug_puthex(len);
+	//debug_cr();
+	int i = 0;
+	while(i < len) {
+		fifo8_push(&usb_hid_rxfifo, USBFS_EP1_Buf[1 + i]);
+		i += 1;
+	}
+	if (fifo8_num_free(&usb_hid_rxfifo) < (8 * 2)) {
+		// rx flow control
+		//debug_puts("EP1 RX FLOW CONTROL\r\n");
+		USBFSD->UEP1_RX_CTRL = (USBFSD->UEP1_RX_CTRL & ~USBFS_UEP_R_RES_MASK) | USBFS_UEP_R_RES_NAK;
+		USBFS_Endp_Busy[DEF_UEP1] = 1;
 	}
 }
 
@@ -247,6 +290,7 @@ void USBFS_IRQHandler(void)
 				if (intst & USBFS_UIS_TOG_OK) {
 					len = USBFSD->RX_LEN;
 					USBFSD->UEP1_RX_CTRL ^= USBFS_UEP_R_TOG;
+					ep1_out_handle(len);
 				}
 				break;
 			}
@@ -805,3 +849,54 @@ void USBFS_Send_Resume(void)
 	USBFSD->UDEV_CTRL ^= USBFS_UD_LOW_SPEED;
 	Delay_Ms(1);
 }
+
+
+void usb_hid_upload_task(void)
+{
+	while (USBFS_Endp_Busy[DEF_UEP4] != 0) {
+		return;
+	}
+	int len = 0;
+	while((len < 7) && (fifo8_num_used(&usb_hid_txfifo) > 0)) {
+		fifo8_pop(&usb_hid_txfifo, &USBFS_EP4_Buf[1 + len]);
+		len += 1;
+	}
+	if (len > 0) {
+		USBFS_Endp_Busy[DEF_UEP4] = 1;
+		USBFS_EP4_Buf[0] = len;
+		/* tx length */
+		USBFSD_UEP_TLEN(DEF_UEP4) = 8;
+		/* response ack */
+		USBFSD_UEP_TX_CTRL(DEF_UEP4) = (USBFSD_UEP_TX_CTRL(DEF_UEP4) & ~USBFS_UEP_T_RES_MASK) | USBFS_UEP_T_RES_ACK;
+	}
+}
+
+void usb_hid_download_task(void)
+{
+	uint8_t c;
+	while (fifo8_num_used(&usb_hid_rxfifo) > 0) {
+		fifo8_pop(&usb_hid_rxfifo, &c);
+		kermit_handle_char(&kctx_iap, c);
+		kermit_handle_rxpkt(&kctx_iap);
+	}
+	if ((USBFS_Endp_Busy[DEF_UEP1] == 1) && (fifo8_num_free(&usb_hid_rxfifo) >= (8 * 2))) {
+		USBFS_Endp_Busy[DEF_UEP1] = 0;
+		USBFSD->UEP1_RX_CTRL = (USBFSD->UEP1_RX_CTRL & ~USBFS_UEP_R_RES_MASK) | USBFS_UEP_R_RES_ACK;
+	}
+}
+
+int usb_hid_send(uint8_t *buf, int len) {
+	int i = 0;
+	while((i <len) && (fifo8_num_free(&usb_hid_txfifo) > 0)) {
+		fifo8_push(&usb_hid_txfifo, buf[i]);
+		i += 1;
+	}
+	return i;
+}
+
+void usbfs_task(void)
+{
+	usb_hid_upload_task();
+	usb_hid_download_task();
+}
+

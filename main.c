@@ -16,5 +16,6 @@ int main(void)
 	kr_init();
 	while (1) {
 		uart_task();
+		usbfs_task();
 	}
 }

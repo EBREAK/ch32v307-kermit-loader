@@ -99,5 +99,7 @@ extern void USBFS_Send_Resume(void);
 extern void USBFS_Sleep_Wakeup_Operate(void);
 extern uint8_t USBFS_Endp_DataUp(uint8_t endp, uint8_t *pbuf, uint16_t len,
 				 uint8_t mod);
+extern int usb_hid_send(uint8_t *buf, int len);
+extern void usbfs_task(void);
 
 #endif
